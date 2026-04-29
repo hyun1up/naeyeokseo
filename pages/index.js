@@ -10,13 +10,22 @@ export default function Home() {
   const [guide, setGuide] = useState('')
   const [activeTab, setActiveTab] = useState('naeyeok')
   const [pdfFile, setPdfFile] = useState(null)
-  const [dragging, setDragging] = useState(false)
-  const fileRef = useRef()
+  const [noimFile, setNoimFile] = useState(null)
+  const [draggingPdf, setDraggingPdf] = useState(false)
+  const [draggingNoim, setDraggingNoim] = useState(false)
+  const pdfRef = useRef()
+  const noimRef = useRef()
 
-  function onDrop(e) {
-    e.preventDefault(); setDragging(false)
-    const f = e.dataTransfer.files[0]
-    if (f && f.type === 'application/pdf') setPdfFile(f)
+  function makeDropHandlers(setter, setDragging) {
+    return {
+      onDragOver: e => { e.preventDefault(); setDragging(true) },
+      onDragLeave: () => setDragging(false),
+      onDrop: e => {
+        e.preventDefault(); setDragging(false)
+        const f = e.dataTransfer.files[0]
+        if (f && f.type === 'application/pdf') setter(f)
+      }
+    }
   }
 
   async function analyze() {
@@ -27,6 +36,7 @@ export default function Home() {
       const fd = new FormData()
       fd.append('description', description)
       if (pdfFile) fd.append('pdf', pdfFile)
+      if (noimFile) fd.append('noim', noimFile)
       const res = await fetch('/api/analyze', { method: 'POST', body: fd })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
@@ -90,6 +100,30 @@ export default function Home() {
   const totExp=items.reduce((s,it)=>s+getAmt(it).exp,0)
   const totAll=totMat+totLab+totExp
 
+  function DropZone({ file, setFile, dragging, fileRef, icon, label, sub, fieldName }) {
+    return (
+      <div
+        className={`drop-zone ${dragging?'drag':''} ${file?'has-file':''}`}
+        {...makeDropHandlers(setFile, fieldName==='pdf'?setDraggingPdf:setDraggingNoim)}
+        onClick={()=>fileRef.current.click()}
+      >
+        {file ? (
+          <div className="file-info">
+            <span>{icon}</span>
+            <span className="file-name">{file.name}</span>
+            <button className="remove-btn" onClick={e=>{e.stopPropagation();setFile(null)}}>✕ 제거</button>
+          </div>
+        ) : (
+          <>
+            <div className="drop-icon">{icon}</div>
+            <div className="drop-label">{label}</div>
+            <div className="drop-sub">{sub}</div>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <>
       <Head>
@@ -102,36 +136,41 @@ export default function Home() {
           <div className="header-inner">
             <div>
               <h1>공사 내역서 생성기</h1>
-              <p className="subtitle">표준품셈 PDF 업로드 → 공사 내용 입력 → AI가 내역서 + 일위대가 자동 생성</p>
+              <p className="subtitle">표준품셈 + 노임단가 PDF 업로드 → 공사 내용 입력 → AI가 내역서 + 일위대가 자동 생성</p>
             </div>
             <span className="badge">AI 적산</span>
           </div>
         </header>
         <main>
           <section className="card">
-            <div className="step-label"><span className="step-num">1</span><span>표준품셈 PDF 업로드 (선택)</span></div>
-            <div
-              className={`drop-zone ${dragging?'drag':''} ${pdfFile?'has-file':''}`}
-              onDragOver={e=>{e.preventDefault();setDragging(true)}}
-              onDragLeave={()=>setDragging(false)}
-              onDrop={onDrop}
-              onClick={()=>fileRef.current.click()}
-            >
-              {pdfFile ? (
-                <div className="file-info">
-                  <span>📄</span>
-                  <span className="file-name">{pdfFile.name}</span>
-                  <button className="remove-btn" onClick={e=>{e.stopPropagation();setPdfFile(null)}}>✕ 제거</button>
-                </div>
-              ) : (
-                <>
-                  <div className="drop-icon">📄</div>
-                  <div className="drop-label">2026년 건설공사 표준품셈 PDF를 여기에 드래그하거나 클릭</div>
-                  <div className="drop-sub">PDF 업로드 시 표준품셈 기준으로 정확한 내역서 작성</div>
-                </>
-              )}
+            <div className="step-label"><span className="step-num">1</span><span>PDF 업로드 (선택사항 — 업로드 시 더 정확해요)</span></div>
+            <div className="upload-grid">
+              <div>
+                <div className="upload-label">📘 표준품셈 PDF</div>
+                <DropZone
+                  file={pdfFile} setFile={setPdfFile} dragging={draggingPdf}
+                  fileRef={pdfRef} icon="📘" fieldName="pdf"
+                  label="표준품셈 PDF 드래그 또는 클릭"
+                  sub="2026년 건설공사 표준품셈"
+                />
+                <input type="file" accept=".pdf" ref={pdfRef} style={{display:'none'}} onChange={e=>e.target.files[0]&&setPdfFile(e.target.files[0])} />
+              </div>
+              <div>
+                <div className="upload-label">📗 노임단가 PDF</div>
+                <DropZone
+                  file={noimFile} setFile={setNoimFile} dragging={draggingNoim}
+                  fileRef={noimRef} icon="📗" fieldName="noim"
+                  label="노임단가 PDF 드래그 또는 클릭"
+                  sub="2026년 건설업 임금실태 조사보고서 등"
+                />
+                <input type="file" accept=".pdf" ref={noimRef} style={{display:'none'}} onChange={e=>e.target.files[0]&&setNoimFile(e.target.files[0])} />
+              </div>
             </div>
-            <input type="file" accept=".pdf" ref={fileRef} style={{display:'none'}} onChange={e=>e.target.files[0]&&setPdfFile(e.target.files[0])} />
+            {(pdfFile||noimFile) && (
+              <div className="upload-status">
+                ✅ {[pdfFile&&'표준품셈',noimFile&&'노임단가'].filter(Boolean).join(' + ')} PDF 업로드됨 — AI가 해당 기준으로 내역서를 작성합니다
+              </div>
+            )}
           </section>
 
           <section className="card">
@@ -144,7 +183,16 @@ export default function Home() {
               </button>
               <button className="btn" onClick={()=>setDescription('용접식 난간 설치 10m, 오수관로 D300 PE관 50m 교체')}>예시 입력</button>
             </div>
-            {loading && <div className="status"><div className="spinner"/><span>{pdfFile?'표준품셈 PDF를 읽고 내역서 작성 중...':'AI가 내역서와 일위대가를 작성하는 중...'}</span></div>}
+            {loading && (
+              <div className="status">
+                <div className="spinner"/>
+                <span>
+                  {[pdfFile&&'표준품셈',noimFile&&'노임단가'].filter(Boolean).length > 0
+                    ? `PDF(${[pdfFile&&'표준품셈',noimFile&&'노임단가'].filter(Boolean).join('+')}) 읽고 내역서 작성 중...`
+                    : 'AI가 내역서와 일위대가를 작성하는 중...'}
+                </span>
+              </div>
+            )}
           </section>
 
           {items.length > 0 && (
@@ -304,15 +352,18 @@ export default function Home() {
         .card{background:#fff;border-radius:12px;padding:1.5rem;margin-bottom:1rem;border:1px solid #e8e6e0}
         .step-label{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:15px;font-weight:500}
         .step-num{width:26px;height:26px;border-radius:50%;background:#1a1a1a;color:#fff;font-size:13px;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
-        .drop-zone{border:2px dashed #ccc;border-radius:10px;padding:2rem 1rem;text-align:center;cursor:pointer;transition:all .15s;background:#fafaf8}
+        .upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        .upload-label{font-size:13px;font-weight:500;margin-bottom:6px;color:#444}
+        .upload-status{margin-top:10px;padding:8px 14px;background:#f0f7f0;border:1px solid #c3e0c3;border-radius:8px;font-size:13px;color:#2d6a2d}
+        .drop-zone{border:2px dashed #ccc;border-radius:10px;padding:1.5rem 1rem;text-align:center;cursor:pointer;transition:all .15s;background:#fafaf8;min-height:90px;display:flex;flex-direction:column;align-items:center;justify-content:center}
         .drop-zone:hover,.drop-zone.drag{border-color:#1a1a1a;background:#f4f3ef}
         .drop-zone.has-file{border-color:#2d6a2d;background:#f0f7f0;border-style:solid}
-        .drop-icon{font-size:28px;margin-bottom:8px}
-        .drop-label{font-size:14px;font-weight:500;margin-bottom:4px}
-        .drop-sub{font-size:12px;color:#888}
-        .file-info{display:flex;align-items:center;gap:10px;justify-content:center}
-        .file-name{font-weight:500;font-size:14px;color:#2d6a2d}
-        .remove-btn{background:none;border:1px solid #ccc;border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;color:#888}
+        .drop-icon{font-size:22px;margin-bottom:6px}
+        .drop-label{font-size:13px;font-weight:500;margin-bottom:3px}
+        .drop-sub{font-size:11px;color:#888}
+        .file-info{display:flex;align-items:center;gap:8px;justify-content:center;flex-wrap:wrap}
+        .file-name{font-weight:500;font-size:13px;color:#2d6a2d;word-break:break-all}
+        .remove-btn{background:none;border:1px solid #ccc;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px;color:#888;white-space:nowrap}
         .remove-btn:hover{background:#fee;color:#c00;border-color:#c00}
         textarea{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font-family:'Noto Sans KR',sans-serif;font-size:14px;resize:vertical;line-height:1.6}
         textarea:focus{outline:none;border-color:#1a1a1a}
@@ -348,6 +399,7 @@ export default function Home() {
         .metric-val{font-size:16px;font-weight:700}
         .guide p{font-size:14px;color:#444;line-height:1.9;white-space:pre-wrap}
         @media(max-width:600px){
+          .upload-grid{grid-template-columns:1fr}
           .summary-grid{grid-template-columns:1fr 1fr}
           .header-inner{flex-direction:column}
           .tab-header{flex-direction:column;align-items:flex-start}
