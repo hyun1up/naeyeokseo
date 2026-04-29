@@ -4,17 +4,16 @@ import Head from 'next/head'
 export default function Home() {
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
-  const [statusText, setStatusText] = useState('')
   const [title, setTitle] = useState('')
   const [items, setItems] = useState([])
+  const [ilwiDaega, setIlwiDaega] = useState([])
   const [guide, setGuide] = useState('')
+  const [activeTab, setActiveTab] = useState('naeyeok')
 
   async function analyze() {
     if (!description.trim()) { alert('공사 내용을 입력해주세요.'); return }
     setLoading(true)
-    setStatusText('AI가 공종과 자재를 분석하는 중...')
-    setItems([])
-    setGuide('')
+    setItems([]); setIlwiDaega([]); setGuide('')
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -24,11 +23,11 @@ export default function Home() {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setTitle(data.title || description.slice(0, 30))
-      setItems((data.items || []).map((it, i) => ({ ...it, id: i, qty: 1 })))
+      setItems((data.items || []).map((it, i) => ({ ...it, id: i })))
+      setIlwiDaega(data.ilwiDaega || [])
       setGuide(data.guide || '')
-    } catch (e) {
-      alert('오류: ' + e.message)
-    }
+      setActiveTab('naeyeok')
+    } catch (e) { alert('오류: ' + e.message) }
     setLoading(false)
   }
 
@@ -36,154 +35,267 @@ export default function Home() {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, qty: parseFloat(v) || 0 } : it))
   }
 
-  function addRow() {
-    setItems(prev => [...prev, { id: prev.length, name: '새 항목', spec: '', unit: '식', type: '재료', unitPrice: 0, qty: 1 }])
+  function getAmt(it) {
+    const mat = Math.round((it.qty || 0) * (it.matPrice || 0))
+    const lab = Math.round((it.qty || 0) * (it.labPrice || 0))
+    const exp = Math.round((it.qty || 0) * (it.expPrice || 0))
+    return { mat, lab, exp, total: mat + lab + exp }
   }
 
   function downloadExcel() {
     if (!items.length) { alert('내역서 항목이 없습니다.'); return }
     import('xlsx').then(XLSX => {
-      const total = items.reduce((s, it) => s + Math.round(it.qty * it.unitPrice), 0)
-      const rows = [
-        ['번호', '품목명', '규격', '단위', '구분', '수량', '단가(원)', '금액(원)'],
-        ...items.map((it, i) => [i + 1, it.name, it.spec || '', it.unit || '', it.type, it.qty, it.unitPrice, Math.round(it.qty * it.unitPrice)]),
-        ['', '', '', '', '', '', '합계', total],
-      ]
       const wb = XLSX.utils.book_new()
-      const ws = XLSX.utils.aoa_to_sheet(rows)
-      ws['!cols'] = [6, 24, 14, 8, 8, 10, 14, 14].map(w => ({ wch: w }))
-      XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 30))
-      XLSX.writeFile(wb, `내역서_${title}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+
+      // 시트1: 내역서
+      const naeyeokRows = [
+        ['품명', '규격', '단위', '수량', '재료비단가', '재료비금액', '노무비단가', '노무비금액', '경비단가', '경비금액', '합계단가', '합계금액', '비고'],
+        ...items.map(it => {
+          const a = getAmt(it)
+          const totPrice = (it.matPrice||0)+(it.labPrice||0)+(it.expPrice||0)
+          return [it.name, it.spec||'', it.unit||'', it.qty||0,
+            it.matPrice||0, a.mat, it.labPrice||0, a.lab, it.expPrice||0, a.exp,
+            totPrice, a.total, it.note||'']
+        }),
+        ['합계','','','',
+          '', items.reduce((s,it)=>s+getAmt(it).mat,0),
+          '', items.reduce((s,it)=>s+getAmt(it).lab,0),
+          '', items.reduce((s,it)=>s+getAmt(it).exp,0),
+          '', items.reduce((s,it)=>s+getAmt(it).total,0), '']
+      ]
+      const ws1 = XLSX.utils.aoa_to_sheet(naeyeokRows)
+      ws1['!cols'] = [18,14,6,8,10,12,10,12,10,12,10,12,12].map(w=>({wch:w}))
+      XLSX.utils.book_append_sheet(wb, ws1, '내역서')
+
+      // 시트2: 일위대가 (각 항목 이어서 출력)
+      const ilwiRows = []
+      ilwiDaega.forEach((iw, idx) => {
+        if (idx > 0) ilwiRows.push(['','','','','','','','','',''])
+        ilwiRows.push([`${iw.title}  ${iw.spec||''}  (${iw.unit||''})`, '', '', '', '', '', '', '', '', ''])
+        ilwiRows.push(['품명','규격','단위','수량','재료비단가','재료비금액','노무비단가','노무비금액','경비단가','경비금액','합계단가','합계금액','비고'])
+        let totMat=0, totLab=0, totExp=0
+        iw.rows.forEach(r => {
+          const mat=Math.round((r.qty||0)*(r.matPrice||0))
+          const lab=Math.round((r.qty||0)*(r.labPrice||0))
+          const exp=Math.round((r.qty||0)*(r.expPrice||0))
+          const totP=(r.matPrice||0)+(r.labPrice||0)+(r.expPrice||0)
+          totMat+=mat; totLab+=lab; totExp+=exp
+          ilwiRows.push([r.name,r.spec||'',r.unit||'',r.qty||0,
+            r.matPrice||0,mat,r.labPrice||0,lab,r.expPrice||0,exp,totP,mat+lab+exp,r.note||''])
+        })
+        ilwiRows.push(['[ 합계 ]','','','','',totMat,'',totLab,'',totExp,'',totMat+totLab+totExp,''])
+      })
+      const ws2 = XLSX.utils.aoa_to_sheet(ilwiRows)
+      ws2['!cols'] = [20,16,6,8,10,12,10,12,10,12,10,12,12].map(w=>({wch:w}))
+      XLSX.utils.book_append_sheet(wb, ws2, '일위대가')
+
+      XLSX.writeFile(wb, `내역서_${title}_${new Date().toISOString().slice(0,10)}.xlsx`)
     })
   }
 
-  const total = items.reduce((s, it) => s + Math.round(it.qty * it.unitPrice), 0)
-  const mat = items.filter(it => it.type === '재료').reduce((s, it) => s + Math.round(it.qty * it.unitPrice), 0)
-  const lab = items.filter(it => it.type === '노무').reduce((s, it) => s + Math.round(it.qty * it.unitPrice), 0)
-  const mac = items.filter(it => it.type === '기계').reduce((s, it) => s + Math.round(it.qty * it.unitPrice), 0)
+  const totMat = items.reduce((s,it)=>s+getAmt(it).mat,0)
+  const totLab = items.reduce((s,it)=>s+getAmt(it).lab,0)
+  const totExp = items.reduce((s,it)=>s+getAmt(it).exp,0)
+  const totAll = totMat+totLab+totExp
 
   return (
     <>
       <Head>
         <title>공사 내역서 생성기</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
       </Head>
-
       <div className="container">
         <header>
           <div className="header-inner">
             <div>
               <h1>공사 내역서 생성기</h1>
-              <p className="subtitle">공사 내용을 입력하면 AI가 공종·자재·단가를 자동으로 추천해드려요</p>
+              <p className="subtitle">공사 내용 입력 → AI가 내역서 + 일위대가 자동 생성 → 엑셀 다운로드</p>
             </div>
             <span className="badge">AI 적산</span>
           </div>
         </header>
-
         <main>
-          {/* 입력 */}
           <section className="card">
-            <div className="step-label">
-              <span className="step-num">1</span>
-              <span>어떤 공사인지 설명해주세요</span>
-            </div>
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder={"예: 아파트 주차장 바닥 균열 보수 공사\n예: 오수관로 D300 PE관 63m 교체\n예: 보도블럭 재포장 180m2"}
-              rows={4}
-            />
+            <div className="step-label"><span className="step-num">1</span><span>어떤 공사인지 설명해주세요</span></div>
+            <textarea value={description} onChange={e=>setDescription(e.target.value)}
+              placeholder={"예: 아파트 주차장 바닥 균열 보수 공사\n예: 오수관로 D300 PE관 63m 교체\n예: 용접식 난간 설치 10m"} rows={4} />
             <div className="btn-row">
               <button className="btn btn-primary" onClick={analyze} disabled={loading}>
                 {loading ? '분석 중...' : 'AI 분석 시작 →'}
               </button>
-              <button className="btn" onClick={() => setDescription('오수관로 D300 PE관 63m 보수 교체 공사, 보도블럭 재포장 포함')}>
-                예시 입력
-              </button>
+              <button className="btn" onClick={()=>setDescription('용접식 난간 설치 10m, 오수관로 D300 PE관 50m 교체')}>예시 입력</button>
             </div>
-            {loading && (
-              <div className="status">
-                <div className="spinner" />
-                <span>{statusText}</span>
-              </div>
-            )}
+            {loading && <div className="status"><div className="spinner"/><span>AI가 내역서와 일위대가를 작성하는 중...</span></div>}
           </section>
 
-          {/* 내역서 */}
           {items.length > 0 && (
             <section className="card">
-              <div className="step-label">
-                <span className="step-num green">2</span>
-                <span>수량 확인 및 조정</span>
-              </div>
-
-              <div className="table-header">
-                <h2 className="table-title">{title}</h2>
-                <div className="btn-row">
-                  <button className="btn" onClick={addRow}>+ 행 추가</button>
+              <div className="tab-header">
+                <div className="tabs">
+                  <button className={`tab ${activeTab==='naeyeok'?'active':''}`} onClick={()=>setActiveTab('naeyeok')}>내역서</button>
+                  {ilwiDaega.length>0 && <button className={`tab ${activeTab==='ilwi'?'active':''}`} onClick={()=>setActiveTab('ilwi')}>일위대가 ({ilwiDaega.length})</button>}
+                  {guide && <button className={`tab ${activeTab==='guide'?'active':''}`} onClick={()=>setActiveTab('guide')}>시공 가이드</button>}
+                </div>
+                <div className="btn-row" style={{margin:0}}>
                   <button className="btn btn-primary" onClick={downloadExcel}>엑셀 다운로드 →</button>
                 </div>
               </div>
 
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 36 }}>번호</th>
-                      <th>품목명</th>
-                      <th style={{ width: 90 }}>규격</th>
-                      <th style={{ width: 50 }}>단위</th>
-                      <th style={{ width: 58 }}>구분</th>
-                      <th style={{ width: 80, textAlign: 'right' }}>수량</th>
-                      <th style={{ width: 100, textAlign: 'right' }}>단가(원)</th>
-                      <th style={{ width: 110, textAlign: 'right' }}>금액(원)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((it, i) => (
-                      <tr key={it.id}>
-                        <td className="muted">{i + 1}</td>
-                        <td className="bold">{it.name}</td>
-                        <td className="muted small">{it.spec}</td>
-                        <td>{it.unit}</td>
-                        <td><span className={`tag tag-${it.type}`}>{it.type}</span></td>
-                        <td style={{ textAlign: 'right' }}>
-                          <input
-                            type="number"
-                            className="qty-input"
-                            value={it.qty}
-                            min={0}
-                            step={0.1}
-                            onChange={e => updateQty(i, e.target.value)}
-                          />
-                        </td>
-                        <td style={{ textAlign: 'right' }}>{it.unitPrice.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right' }}>{Math.round(it.qty * it.unitPrice).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={7} style={{ textAlign: 'right', fontWeight: 500 }}>합 계</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700 }}>{total.toLocaleString()} 원</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+              {activeTab==='naeyeok' && (
+                <>
+                  <div className="table-title" style={{margin:'12px 0 10px'}}>{title}</div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th rowSpan={2} style={{width:36}}>번호</th>
+                          <th rowSpan={2}>품목명</th>
+                          <th rowSpan={2} style={{width:80}}>규격</th>
+                          <th rowSpan={2} style={{width:46}}>단위</th>
+                          <th rowSpan={2} style={{width:72,textAlign:'right'}}>수량</th>
+                          <th colSpan={2} style={{textAlign:'center',borderLeft:'1px solid #eee'}}>재료비</th>
+                          <th colSpan={2} style={{textAlign:'center',borderLeft:'1px solid #eee'}}>노무비</th>
+                          <th colSpan={2} style={{textAlign:'center',borderLeft:'1px solid #eee'}}>경비</th>
+                          <th colSpan={2} style={{textAlign:'center',borderLeft:'1px solid #eee'}}>합계</th>
+                          <th rowSpan={2} style={{width:70}}>비고</th>
+                        </tr>
+                        <tr>
+                          {['단가','금액','단가','금액','단가','금액','단가','금액'].map((h,i)=>(
+                            <th key={i} style={{textAlign:'right',width:80,borderLeft:i%2===0?'1px solid #eee':undefined}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((it,i)=>{
+                          const a=getAmt(it)
+                          const totP=(it.matPrice||0)+(it.labPrice||0)+(it.expPrice||0)
+                          return (
+                            <tr key={i}>
+                              <td className="muted">{i+1}</td>
+                              <td className="bold">{it.name}</td>
+                              <td className="muted small">{it.spec}</td>
+                              <td>{it.unit}</td>
+                              <td style={{textAlign:'right'}}>
+                                <input type="number" className="qty-input" value={it.qty} min={0} step={0.1} onChange={e=>updateQty(i,e.target.value)}/>
+                              </td>
+                              <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{(it.matPrice||0).toLocaleString()}</td>
+                              <td style={{textAlign:'right'}}>{a.mat.toLocaleString()}</td>
+                              <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{(it.labPrice||0).toLocaleString()}</td>
+                              <td style={{textAlign:'right'}}>{a.lab.toLocaleString()}</td>
+                              <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{(it.expPrice||0).toLocaleString()}</td>
+                              <td style={{textAlign:'right'}}>{a.exp.toLocaleString()}</td>
+                              <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{totP.toLocaleString()}</td>
+                              <td style={{textAlign:'right'}}>{a.total.toLocaleString()}</td>
+                              <td className="muted small">{it.note}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={5} style={{textAlign:'right',fontWeight:500}}>합 계</td>
+                          <td style={{borderLeft:'1px solid #ddd'}}></td>
+                          <td style={{textAlign:'right',fontWeight:700}}>{totMat.toLocaleString()}</td>
+                          <td style={{borderLeft:'1px solid #ddd'}}></td>
+                          <td style={{textAlign:'right',fontWeight:700}}>{totLab.toLocaleString()}</td>
+                          <td style={{borderLeft:'1px solid #ddd'}}></td>
+                          <td style={{textAlign:'right',fontWeight:700}}>{totExp.toLocaleString()}</td>
+                          <td style={{borderLeft:'1px solid #ddd'}}></td>
+                          <td style={{textAlign:'right',fontWeight:700}}>{totAll.toLocaleString()}</td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <div className="summary-grid">
+                    <div className="metric"><div className="metric-label">재료비</div><div className="metric-val">{totMat.toLocaleString()}원</div></div>
+                    <div className="metric"><div className="metric-label">노무비</div><div className="metric-val">{totLab.toLocaleString()}원</div></div>
+                    <div className="metric"><div className="metric-label">경비</div><div className="metric-val">{totExp.toLocaleString()}원</div></div>
+                    <div className="metric" style={{gridColumn:'1/-1',background:'#1a1a1a',color:'#fff'}}>
+                      <div className="metric-label" style={{color:'#aaa'}}>총 합계</div>
+                      <div className="metric-val">{totAll.toLocaleString()}원</div>
+                    </div>
+                  </div>
+                </>
+              )}
 
-              <div className="summary-grid">
-                <div className="metric"><div className="metric-label">재료비</div><div className="metric-val">{mat.toLocaleString()}원</div></div>
-                <div className="metric"><div className="metric-label">노무비</div><div className="metric-val">{lab.toLocaleString()}원</div></div>
-                <div className="metric"><div className="metric-label">기계경비</div><div className="metric-val">{mac.toLocaleString()}원</div></div>
-              </div>
-
-              {guide && (
-                <div className="guide">
-                  <div className="guide-title">AI 시공 가이드</div>
-                  <p>{guide}</p>
+              {activeTab==='ilwi' && (
+                <div style={{marginTop:12}}>
+                  {ilwiDaega.map((iw,idx)=>{
+                    let iwMat=0,iwLab=0,iwExp=0
+                    iw.rows.forEach(r=>{iwMat+=Math.round((r.qty||0)*(r.matPrice||0));iwLab+=Math.round((r.qty||0)*(r.labPrice||0));iwExp+=Math.round((r.qty||0)*(r.expPrice||0))})
+                    return (
+                      <div key={idx} style={{marginBottom:24}}>
+                        <div className="ilwi-title">{iw.title} <span className="muted small">{iw.spec} / {iw.unit}</span></div>
+                        <div className="table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>품명</th>
+                                <th style={{width:100}}>규격</th>
+                                <th style={{width:46}}>단위</th>
+                                <th style={{width:60,textAlign:'right'}}>수량</th>
+                                <th style={{width:80,textAlign:'right',borderLeft:'1px solid #eee'}}>재료비단가</th>
+                                <th style={{width:80,textAlign:'right'}}>재료비금액</th>
+                                <th style={{width:80,textAlign:'right',borderLeft:'1px solid #eee'}}>노무비단가</th>
+                                <th style={{width:80,textAlign:'right'}}>노무비금액</th>
+                                <th style={{width:70,textAlign:'right',borderLeft:'1px solid #eee'}}>경비단가</th>
+                                <th style={{width:70,textAlign:'right'}}>경비금액</th>
+                                <th style={{width:80,textAlign:'right',borderLeft:'1px solid #eee'}}>합계단가</th>
+                                <th style={{width:80,textAlign:'right'}}>합계금액</th>
+                                <th style={{width:80}}>비고</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {iw.rows.map((r,ri)=>{
+                                const mat=Math.round((r.qty||0)*(r.matPrice||0))
+                                const lab=Math.round((r.qty||0)*(r.labPrice||0))
+                                const exp=Math.round((r.qty||0)*(r.expPrice||0))
+                                const totP=(r.matPrice||0)+(r.labPrice||0)+(r.expPrice||0)
+                                return (
+                                  <tr key={ri}>
+                                    <td className="bold">{r.name}</td>
+                                    <td className="muted small">{r.spec}</td>
+                                    <td>{r.unit}</td>
+                                    <td style={{textAlign:'right'}}>{r.qty}</td>
+                                    <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{(r.matPrice||0).toLocaleString()}</td>
+                                    <td style={{textAlign:'right'}}>{mat.toLocaleString()}</td>
+                                    <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{(r.labPrice||0).toLocaleString()}</td>
+                                    <td style={{textAlign:'right'}}>{lab.toLocaleString()}</td>
+                                    <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{(r.expPrice||0).toLocaleString()}</td>
+                                    <td style={{textAlign:'right'}}>{exp.toLocaleString()}</td>
+                                    <td style={{textAlign:'right',borderLeft:'1px solid #f0eeea'}}>{totP.toLocaleString()}</td>
+                                    <td style={{textAlign:'right'}}>{(mat+lab+exp).toLocaleString()}</td>
+                                    <td className="muted small">{r.note}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr>
+                                <td colSpan={4} style={{textAlign:'right',fontWeight:500}}>[ 합계 ]</td>
+                                <td style={{borderLeft:'1px solid #ddd'}}></td>
+                                <td style={{textAlign:'right',fontWeight:700}}>{iwMat.toLocaleString()}</td>
+                                <td style={{borderLeft:'1px solid #ddd'}}></td>
+                                <td style={{textAlign:'right',fontWeight:700}}>{iwLab.toLocaleString()}</td>
+                                <td style={{borderLeft:'1px solid #ddd'}}></td>
+                                <td style={{textAlign:'right',fontWeight:700}}>{iwExp.toLocaleString()}</td>
+                                <td style={{borderLeft:'1px solid #ddd'}}></td>
+                                <td style={{textAlign:'right',fontWeight:700}}>{(iwMat+iwLab+iwExp).toLocaleString()}</td>
+                                <td></td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
+              )}
+
+              {activeTab==='guide' && (
+                <div className="guide"><p>{guide}</p></div>
               )}
             </section>
           )}
@@ -193,7 +305,7 @@ export default function Home() {
       <style jsx global>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Noto Sans KR', sans-serif; background: #f4f3ef; color: #1a1a1a; min-height: 100vh; }
-        .container { max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
         header { margin-bottom: 1.5rem; }
         .header-inner { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
         h1 { font-size: 22px; font-weight: 700; }
@@ -202,7 +314,6 @@ export default function Home() {
         .card { background: #fff; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid #e8e6e0; }
         .step-label { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 15px; font-weight: 500; }
         .step-num { width: 26px; height: 26px; border-radius: 50%; background: #1a1a1a; color: #fff; font-size: 13px; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; }
-        .step-num.green { background: #2d6a2d; }
         textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-family: 'Noto Sans KR', sans-serif; font-size: 14px; resize: vertical; line-height: 1.6; }
         textarea:focus { outline: none; border-color: #1a1a1a; }
         .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -214,33 +325,33 @@ export default function Home() {
         .status { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 14px; background: #f4f3ef; border-radius: 8px; font-size: 13px; color: #555; }
         .spinner { width: 14px; height: 14px; border: 2px solid #ddd; border-top: 2px solid #1a1a1a; border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .table-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-        .table-title { font-size: 16px; font-weight: 700; }
+        .tab-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid #eee; padding-bottom: 12px; }
+        .tabs { display: flex; gap: 4px; }
+        .tab { padding: 7px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; cursor: pointer; background: #fff; font-family: 'Noto Sans KR', sans-serif; }
+        .tab.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+        .table-title { font-size: 15px; font-weight: 700; }
+        .ilwi-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; padding: 8px 12px; background: #f4f3ef; border-radius: 6px; }
         .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
-        th { text-align: left; padding: 8px 10px; font-size: 12px; font-weight: 500; color: #666; border-bottom: 1px solid #eee; background: #fafaf8; }
-        td { padding: 8px 10px; border-bottom: 1px solid #f0eeea; vertical-align: middle; }
-        tfoot td { background: #f4f3ef; border-top: 1px solid #ddd; padding: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { text-align: left; padding: 7px 8px; font-size: 11px; font-weight: 500; color: #555; border-bottom: 1px solid #ddd; background: #fafaf8; white-space: nowrap; }
+        td { padding: 7px 8px; border-bottom: 1px solid #f0eeea; vertical-align: middle; white-space: nowrap; }
+        tfoot td { background: #f4f3ef; border-top: 1px solid #ddd; padding: 8px; }
         tr:hover td { background: #fafaf8; }
         .muted { color: #888; }
-        .small { font-size: 12px; }
+        .small { font-size: 11px; }
         .bold { font-weight: 500; }
-        .tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
-        .tag-재료 { background: #e8f0fd; color: #1a4a8a; }
-        .tag-노무 { background: #e8f5e8; color: #1a5c1a; }
-        .tag-기계 { background: #fef3e2; color: #7a4a00; }
-        .qty-input { width: 68px; text-align: right; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #ddd; font-family: 'Noto Sans KR', sans-serif; }
+        .qty-input { width: 64px; text-align: right; font-size: 12px; padding: 3px 5px; border-radius: 5px; border: 1px solid #ddd; font-family: 'Noto Sans KR', sans-serif; }
         .qty-input:focus { outline: none; border-color: #1a1a1a; }
-        .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
         .metric { background: #f4f3ef; border-radius: 8px; padding: 12px 14px; }
         .metric-label { font-size: 12px; color: #888; margin-bottom: 4px; }
-        .metric-val { font-size: 17px; font-weight: 700; }
-        .guide { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
-        .guide-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
-        .guide p { font-size: 13px; color: #555; line-height: 1.8; white-space: pre-wrap; }
+        .metric-val { font-size: 16px; font-weight: 700; }
+        .guide { margin-top: 12px; }
+        .guide p { font-size: 14px; color: #444; line-height: 1.9; white-space: pre-wrap; }
         @media (max-width: 600px) {
           .summary-grid { grid-template-columns: 1fr 1fr; }
           .header-inner { flex-direction: column; }
+          .tab-header { flex-direction: column; align-items: flex-start; }
         }
       `}</style>
     </>
