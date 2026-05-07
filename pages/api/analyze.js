@@ -14,10 +14,17 @@ export default async function handler(req, res) {
     const description = Array.isArray(fields.description) ? fields.description[0] : fields.description
     if (!description) return res.status(400).json({ error: '공사 내용을 입력해주세요.' })
 
-    const system = `당신은 대한민국 건설공사 적산 전문가입니다. 표준품셈 기준으로 내역서와 일위대가를 작성합니다.
-사용자가 공사 내용을 설명하면 JSON만 반환하세요. 마크다운 코드블록 없이 순수 JSON만 출력하세요.
+    const system = `당신은 대한민국 건설공사 적산 전문가입니다.
 
-출력 형식:
+[중요 지시사항]
+1. 첨부된 표준품셈 PDF에서 공사 내용에 해당하는 품번을 반드시 찾으세요.
+2. 찾은 품번의 직종명, 인원수량, 단위를 PDF에 나온 그대로 사용하세요. 수치를 임의로 만들지 마세요.
+3. 품번을 못 찾은 항목은 note에 "표준품셈 해당항목 없음(추정)"이라고 표시하세요.
+4. 일위대가 rows에는 PDF의 직종명(내장공, 보통인부 등)과 수량을 그대로 기재하세요.
+5. 비고란에 품번을 반드시 기재하세요. 예: 건축3-2-3
+
+JSON만 반환. 마크다운 코드블록 없이 순수 JSON만 출력.
+
 {
   "title": "공사명",
   "items": [
@@ -29,24 +36,25 @@ export default async function handler(req, res) {
       "matPrice": 재료비단가,
       "labPrice": 노무비단가,
       "expPrice": 경비단가,
-      "note": "비고(예: 2026년 노임)"
+      "note": "표준품셈 품번 예: 건축3-2-3"
     }
   ],
   "ilwiDaega": [
     {
-      "title": "일위대가 항목명",
+      "title": "일위대가명",
+      "poomBun": "품번 예: 건축 3-2-3",
       "spec": "규격",
       "unit": "단위",
       "rows": [
         {
-          "name": "품명",
-          "spec": "규격",
-          "unit": "단위",
-          "qty": 숫자,
-          "matPrice": 재료비단가,
-          "labPrice": 노무비단가,
-          "expPrice": 경비단가,
-          "note": "비고"
+          "name": "직종명 예: 내장공",
+          "spec": "예: 소규모할증 적용",
+          "unit": "인",
+          "qty": 0.018,
+          "matPrice": 0,
+          "labPrice": 노임단가숫자,
+          "expPrice": 0,
+          "note": "2026년 노임"
         }
       ]
     }
@@ -54,40 +62,28 @@ export default async function handler(req, res) {
   "guide": "시공 순서 및 주의사항 3~5줄"
 }
 
-규칙:
-- 표준품셈 PDF가 첨부된 경우 해당 PDF의 품목·수량·단가 기준으로 작성
-- 노임단가 PDF가 첨부된 경우 해당 PDF의 직종별 노임단가를 그대로 사용
-- PDF가 없는 경우 2026년 기준 시중 단가로 추정
-- 공구손료 및 경장비: 인력품의 2%
-- 잡재료비: 인력품의 2%
-- items: 공종별 내역서 항목 (재료/노무/기계 모두 포함)
-- ilwiDaega: 주요 공종별 일위대가 (표준품셈 형식, 공구손료·잡재료비 등 포함)`
+- 노임단가 PDF 첨부시 해당 직종 노임단가 그대로 사용
+- 공구손료 및 경장비: 인력품의 2% (별도 행 추가)
+- 잡재료비: 인력품의 2% (별도 행 추가)`
 
     try {
       const messageContent = []
-
       const pdfFile = files.pdf ? (Array.isArray(files.pdf) ? files.pdf[0] : files.pdf) : null
       const noimFile = files.noim ? (Array.isArray(files.noim) ? files.noim[0] : files.noim) : null
 
       if (pdfFile) {
         const buf = fs.readFileSync(pdfFile.filepath)
-        messageContent.push({
-          type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') }
-        })
+        messageContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') }, title: '표준품셈 PDF' })
       }
       if (noimFile) {
         const buf = fs.readFileSync(noimFile.filepath)
-        messageContent.push({
-          type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') }
-        })
+        messageContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') }, title: '노임단가 PDF' })
       }
 
       const uploadedDocs = [pdfFile && '표준품셈 PDF', noimFile && '노임단가 PDF'].filter(Boolean).join(', ')
       messageContent.push({
         type: 'text',
-        text: `다음 공사의 내역서와 일위대가를 작성해주세요${uploadedDocs ? ` (첨부된 ${uploadedDocs}를 반드시 참고하세요)` : ''}:\n${description}`
+        text: `다음 공사 내용을 분석하여 표준품셈 품번을 찾고 내역서와 일위대가를 작성하세요${uploadedDocs ? `. 첨부된 ${uploadedDocs}에서 해당 품번을 찾아 수치를 그대로 사용하세요` : ''}:\n\n${description}`
       })
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
